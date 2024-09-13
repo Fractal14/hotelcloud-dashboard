@@ -6,9 +6,8 @@ import plotly.graph_objects as go
 from PIL import Image
 import plotly.colors as pc
 import math
-
+import calendar
 st.set_page_config(layout="wide")
-hotel_id = st.selectbox("Select Hotel ID", options=[3, 4, 6, 529, 4559], index=0)
 
 # Add this near the top of your script, after the imports
 PICKUP_COLOR = 'rgb(31, 119, 180)'  # Blue
@@ -17,31 +16,13 @@ RATE_COLOR = 'rgb(214, 39, 40)'     # Red
 
 # Read in Data
 @st.cache_data
-def load_data(hotel_id):
-    if hotel_id == 3: 
-        pickup_data = pd.read_csv('3_pickup.csv')
-        full_refundable_rates_data = pd.read_csv('full_refundables_rate_3.csv')
-        bookings_forecast_data = pd.read_csv('forecasted_rev_3.csv')
-    if hotel_id == 4:
-        pickup_data = pd.read_csv('4_pickup.csv')
-        full_refundable_rates_data = pd.read_csv('full_refundables_rate_data_4.csv')
-        bookings_forecast_data = pd.read_csv('forecast_revenue_4.csv')
-    if hotel_id == 6:
-        pickup_data = pd.read_csv('6_pickup.csv')
-        full_refundable_rates_data = pd.read_csv('full_refundables_rate_data.csv')
-        bookings_forecast_data = pd.read_csv('bookings_forecast.csv')
-    if hotel_id == 529:
-        pickup_data = pd.read_csv('529_pickup.csv')
-        full_refundable_rates_data = pd.read_csv('full_refundables_rate_529.csv')
-        bookings_forecast_data = pd.read_csv('forecast_revenue_529.csv')
-    if hotel_id == 4559:
-        pickup_data = pd.read_csv('4559_pickup.csv')
-        full_refundable_rates_data = pd.read_csv('full_refundable_rates_4559.csv')
-        bookings_forecast_data = pd.read_csv('forecast_data_4559.csv')
-
+def load_data():
+    pickup_data = pd.read_csv('6_pickup.csv')
+    full_refundable_rates_data = pd.read_csv('full_refundables_rate_data.csv')
+    bookings_forecast_data = pd.read_csv('bookings_forecast.csv')
     return pickup_data, full_refundable_rates_data, bookings_forecast_data
 
-pickup_data, full_refundable_rates_data, bookings_forecast_data = load_data(hotel_id)
+pickup_data, full_refundable_rates_data, bookings_forecast_data = load_data()
 
 def convert_to_previous_year(start_date, end_date, years_back=1):
     # Convert input strings to datetime objects if they're not already
@@ -62,7 +43,6 @@ def convert_to_previous_year(start_date, end_date, years_back=1):
     prev_end = get_previous_year_same_weekday(end_date, years_back)
 
     return prev_start, prev_end
-
 @st.cache_data
 def create_normalized_heatmap(data, start_date, end_date, value_column='refundable_rate'):
     # Convert 'report_date' and 'stay_date' to datetime
@@ -80,64 +60,99 @@ def create_normalized_heatmap(data, start_date, end_date, value_column='refundab
     pivot_data = data.pivot_table(values=value_column, index='stay_date', columns='report_date', aggfunc='sum')
     pivot_data = pivot_data.reindex(index=all_dates, columns=all_dates, fill_value=np.nan)
     
+    # Store original dates
+    original_index = pivot_data.index
+    original_columns = pivot_data.columns
+    
+    # Normalize dates to year 2000 and 2001
+    def normalize_year(date):
+        if date.year == start_date.year:
+            try:
+                return date.replace(year=2000)
+            except ValueError:  # Handle February 29
+                return date.replace(year=2000, day=28)
+        else:
+            try:
+                return date.replace(year=2001)
+            except ValueError:  # Handle February 29
+                return date.replace(year=2001, day=28)
+    
+    pivot_data.index = pivot_data.index.map(normalize_year)
+    pivot_data.columns = pivot_data.columns.map(normalize_year)
+    
     # Check for any infinities or very large values
     if np.isinf(pivot_data).any().any() or (np.abs(pivot_data) > 1e10).any().any():
         print("Warning: Infinite or very large values detected in the data.")
         pivot_data = pivot_data.replace([np.inf, -np.inf], np.nan)
     
-    return pivot_data
+    return pivot_data, original_index, original_columns
 
 @st.cache_data
-def create_single_line_plot(pickup_data, bookings_forecast_data, full_refundable_rates_data, stay_date, selected_tab):
+def create_line_plot(pickup_data, bookings_forecast_data, full_refundable_rates_data, stay_date, selected_tab):
+    # Filter data for the selected stay date
+    pickup_filtered = pickup_data[pickup_data['stay_date'] == stay_date.strftime('%Y-%m-%d')]
+    bookings_filtered = bookings_forecast_data[bookings_forecast_data['stay_date'] == stay_date.strftime('%Y-%m-%d')]
+    rates_filtered = full_refundable_rates_data[full_refundable_rates_data['stay_date'] == stay_date.strftime('%Y-%m-%d')]
+
+    # Create the line plot
     fig = go.Figure()
 
-    color = PICKUP_COLOR
-
     if selected_tab == "Pickup Data":
-        filtered_data = pickup_data[pickup_data['stay_date'] == stay_date.strftime('%Y-%m-%d')]
-        fig.add_trace(go.Scatter(x=filtered_data['report_date'], y=filtered_data['total_rooms'],
-                                 mode='lines+markers', name='Pickup (Total Rooms)', line=dict(color=color)))
+        fig.add_trace(go.Scatter(x=pickup_filtered['report_date'], y=pickup_filtered['total_rooms'],
+                                 mode='lines+markers', name='Pickup (Total Rooms)', line=dict(color=PICKUP_COLOR)))
         y_axis_title = 'Total Rooms'
     elif selected_tab == "Forecasted Revenue Data":
-        filtered_data = bookings_forecast_data[bookings_forecast_data['stay_date'] == stay_date.strftime('%Y-%m-%d')]
-        filtered_data = filtered_data.sort_values('report_date')
-        filtered_data['cumulative_revenue'] = filtered_data['revenue'].cumsum()
-        fig.add_trace(go.Scatter(x=filtered_data['report_date'], y=filtered_data['cumulative_revenue'],
-                                 mode='lines+markers', name='Cumulative Revenue Forecast', line=dict(color=color)))
+        # Sort the data by report_date to ensure the line is drawn correctly
+        bookings_filtered = bookings_filtered.sort_values('report_date')
+        # Calculate cumulative sum of revenue
+        bookings_filtered['cumulative_revenue'] = bookings_filtered['revenue'].cumsum()
+        fig.add_trace(go.Scatter(x=bookings_filtered['report_date'], y=bookings_filtered['cumulative_revenue'],
+                                 mode='lines+markers', name='Cumulative Revenue Forecast', line=dict(color=REVENUE_COLOR)))
         y_axis_title = 'Cumulative Revenue'
     else:  # Full Refundable Rates Data
-        filtered_data = full_refundable_rates_data[full_refundable_rates_data['stay_date'] == stay_date.strftime('%Y-%m-%d')]
-        fig.add_trace(go.Scatter(x=filtered_data['report_date'], y=filtered_data['refundable_rate'],
-                                 mode='lines+markers', name='Refundable Rate', line=dict(color=color)))
+        fig.add_trace(go.Scatter(x=rates_filtered['report_date'], y=rates_filtered['refundable_rate'],
+                                 mode='lines+markers', name='Refundable Rate', line=dict(color=RATE_COLOR)))
         y_axis_title = 'Refundable Rate'
 
     # Update layout
     fig.update_layout(
-        title=f'{selected_tab} for Selected Stay Date',
+        title=f'{selected_tab} for Stay Date: {stay_date.strftime("%Y-%m-%d")}',
         xaxis_title='Report Date',
         yaxis_title=y_axis_title,
         height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        showlegend=False,
     )
 
     return fig
 
-def plot_heatmap_plotly(data, title, value_column, start_date, end_date, colorbar_min=None, colorbar_max=None, selected_stay_date=None):
+def plot_heatmap_plotly(data_current, data_prev, data_prev2, title, value_column, start_date, end_date, colorbar_min=None, colorbar_max=None, selected_stay_date=None):
+    # Unpack the data and original dates
+    data_current, orig_index_current, orig_columns_current = data_current
+    data_prev, orig_index_prev, orig_columns_prev = data_prev
+    data_prev2, orig_index_prev2, orig_columns_prev2 = data_prev2
+
     # Set default values if not provided
     if colorbar_min is None:
-        colorbar_min = data.values.min()
+        colorbar_min = min(data_current.values.min(), data_prev.values.min(), data_prev2.values.min())
     if colorbar_max is None:
-        colorbar_max = data.values.max()
+        colorbar_max = max(data_current.values.max(), data_prev.values.max(), data_prev2.values.max())
 
     # Create a custom colorscale
     colors = pc.sequential.Rainbow
     colorscale = pc.make_colorscale(['rgb(255,255,255)'] + colors)
 
-    # Create an empty Figure object
-    fig = go.Figure()
-
-    # Add the heatmap trace to the figure
-    fig.add_trace(go.Heatmap(
+    # Function to create heatmap with custom hover template
+    def create_heatmap(data, orig_index, orig_columns):
+        mask = ~np.isnan(data.values)
+        customdata = np.array([
+        [
+            [col.strftime('%Y-%m-%d'), idx.strftime('%Y-%m-%d')] if mask[i, j] else [None, None]
+            for j, col in enumerate(orig_columns)
+        ]
+        for i, idx in enumerate(orig_index)
+    ])
+        
+        return go.Heatmap(
         z=data.values,
         x=data.columns,
         y=data.index,
@@ -151,31 +166,92 @@ def plot_heatmap_plotly(data, title, value_column, start_date, end_date, colorba
             yanchor='top',
             thickness=20,
             len=0.9
-        )
-    ))
+        ),
+        hovertemplate=(
+            "Report Date: %{customdata[0]}<br>" +
+            "Stay Date: %{customdata[1]}<br>" +
+            f"{value_column}: %{{z:.2f}}<extra></extra>"
+        ),
+        customdata=customdata,
+        hoverinfo='text'
+    )
+
+    # Create heatmaps for each year range
+    heatmap_current = create_heatmap(data_current, orig_index_current, orig_columns_current)
+    heatmap_prev = create_heatmap(data_prev, orig_index_prev, orig_columns_prev)
+    heatmap_prev2 = create_heatmap(data_prev2, orig_index_prev2, orig_columns_prev2)
+
+    heatmap_current.visible = True
+    heatmap_prev.visible = False
+    heatmap_prev2.visible = False
+
+    fig = go.Figure(data=[heatmap_current, heatmap_prev, heatmap_prev2])
+
+    # Add buttons for year selection
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="right",
+                active=0,
+                x=0.57,
+                y=1.2,
+                buttons=list([
+                    dict(label=f"{start_date.year}-{end_date.year}",
+                         method="update",
+                         args=[{"visible": [True, False, False]},
+                               {"title": f'{title}<br>{start_date.year}-{end_date.year}'}]),
+                    dict(label=f"{start_date.year-1}-{end_date.year-1}",
+                         method="update",
+                         args=[{"visible": [False, True, False]},
+                               {"title": f'{title}<br>{start_date.year-1}-{end_date.year-1}'}]),
+                    dict(label=f"{start_date.year-2}-{end_date.year-2}",
+                         method="update",
+                         args=[{"visible": [False, False, True]},
+                               {"title": f'{title}<br>{start_date.year-2}-{end_date.year-2}'}]),
+                ]),
+            )
+        ]
+    )
+
+    # Update x and y axis settings
+    fig.update_xaxes(
+        tickformat="%b %d",
+        tickformatstops=[
+            dict(dtickrange=[None, "M1"], value="%b %d"),
+            dict(dtickrange=["M1", None], value="%b")
+        ]
+    )
+    fig.update_yaxes(
+        tickformat="%b %d",
+        tickformatstops=[
+            dict(dtickrange=[None, "M1"], value="%b %d"),
+            dict(dtickrange=["M1", None], value="%b")
+        ],
+        autorange="reversed"
+    )
 
     # Add horizontal line for selected stay date
     if selected_stay_date:
+        selected_stay_date = pd.to_datetime(selected_stay_date)
+        normalized_selected_date = selected_stay_date.replace(year=2000 if selected_stay_date.year == start_date.year else 2001)
         fig.add_shape(
             type="line",
-            x0=data.columns.min(),
-            x1=data.columns.max(),
-            y0=selected_stay_date,
-            y1=selected_stay_date,
+            x0=data_current.columns.min(),
+            x1=data_current.columns.max(),
+            y0=normalized_selected_date,
+            y1=normalized_selected_date,
             line=dict(color="red", width=2, dash="dash"),
         )
 
-    # Update layout
     fig.update_layout(
-        title=f'{title}<br>for Dates from {start_date.strftime("%d/%m/%Y")} to {end_date.strftime("%d/%m/%Y")}',
+        title=f'{title}<br>{start_date.year}-{end_date.year}',
         xaxis_title='Report Date',
         yaxis_title='Stay Date',
         height=700,
-        margin=dict(b=150)
+        margin=dict(b=150, t=150)
     )
 
-    fig.update_yaxes(autorange="reversed")
-    
     return fig
 
 def calculate_step_size(min_value, max_value):
@@ -211,15 +287,9 @@ with col1:
 
     st.markdown("<br><br>", unsafe_allow_html=True)
 
-    stay_date_1 = st.date_input("Choose Stay Date", value=start_date, format="DD/MM/YYYY")
-    stay_date_2, _ = convert_to_previous_year(stay_date_1, stay_date_1)
-    stay_date_3, _ = convert_to_previous_year(stay_date_1, stay_date_1, years_back=2)
-
-    # Display info boxes for all three dates
-    st.info(f"Selected Stay Date: {stay_date_1.strftime('%A, %B %d, %Y')}")
-    st.info(f"LY1 (Previous Year): {stay_date_2.strftime('%A, %B %d, %Y')}")
-    st.info(f"LY2 (2 Years Previous): {stay_date_3.strftime('%A, %B %d, %Y')}")
-
+    # Add this after the existing date inputs in the first column
+    stay_date = st.date_input("Select Stay Date for Line Plot", value=start_date, format="DD/MM/YYYY")
+    
     # Add checkbox to enable custom colorbar range
     custom_range = st.checkbox("Use custom colorbar range")
     
@@ -253,7 +323,7 @@ prev2_start_date, prev2_end_date = convert_to_previous_year(start_date, end_date
 
 # Precompute all normalized data and graphs
 @st.cache_data
-def precompute_graphs(pickup_data, full_refundable_rates_data, bookings_forecast_data, start_date, end_date, prev_start_date, prev_end_date, prev2_start_date, prev2_end_date, custom_range, pickup_cmin, pickup_cmax, revenue_cmin, revenue_cmax, rate_cmin, rate_cmax, stay_date_1, stay_date_2, stay_date_3):
+def precompute_graphs(pickup_data, full_refundable_rates_data, bookings_forecast_data, start_date, end_date, prev_start_date, prev_end_date, prev2_start_date, prev2_end_date, custom_range, pickup_cmin, pickup_cmax, revenue_cmin, revenue_cmax, rate_cmin, rate_cmax, stay_date):
     pickup_norm = create_normalized_heatmap(pickup_data, start_date, end_date, 'total_rooms')
     pickup_norm_prev = create_normalized_heatmap(pickup_data, prev_start_date, prev_end_date, 'total_rooms')
     pickup_norm_prev2 = create_normalized_heatmap(pickup_data, prev2_start_date, prev2_end_date, 'total_rooms')
@@ -264,24 +334,16 @@ def precompute_graphs(pickup_data, full_refundable_rates_data, bookings_forecast
     bookings_norm_prev = create_normalized_heatmap(bookings_forecast_data, prev_start_date, prev_end_date, 'revenue')
     bookings_norm_prev2 = create_normalized_heatmap(bookings_forecast_data, prev2_start_date, prev2_end_date, 'revenue')
 
-    pickup_fig = plot_heatmap_plotly(pickup_norm, 'Heatmap of Total Rooms', 'Total Rooms', start_date, end_date, pickup_cmin, pickup_cmax, stay_date_1)
-    pickup_fig_prev = plot_heatmap_plotly(pickup_norm_prev, 'Heatmap of Total Rooms (Previous Year)', 'Total Rooms', prev_start_date, prev_end_date, pickup_cmin, pickup_cmax, stay_date_2)
-    pickup_fig_prev2 = plot_heatmap_plotly(pickup_norm_prev2, 'Heatmap of Total Rooms (2 Years Previous)', 'Total Rooms', prev2_start_date, prev2_end_date, pickup_cmin, pickup_cmax, stay_date_3)
-    
-    bookings_fig = plot_heatmap_plotly(bookings_norm, 'Heatmap of Forecasted Revenue', 'Revenue', start_date, end_date, revenue_cmin, revenue_cmax, stay_date_1)
-    bookings_fig_prev = plot_heatmap_plotly(bookings_norm_prev, 'Heatmap of Forecasted Revenue (Previous Year)', 'Revenue', prev_start_date, prev_end_date, revenue_cmin, revenue_cmax, stay_date_2)
-    bookings_fig_prev2 = plot_heatmap_plotly(bookings_norm_prev2, 'Heatmap of Forecasted Revenue (2 Years Previous)', 'Revenue', prev2_start_date, prev2_end_date, revenue_cmin, revenue_cmax, stay_date_3)
-    
-    full_refundable_fig = plot_heatmap_plotly(full_refundable_norm, 'Heatmap of Refundable Rates', 'Refundable Rate', start_date, end_date, rate_cmin, rate_cmax, stay_date_1)
-    full_refundable_fig_prev = plot_heatmap_plotly(full_refundable_norm_prev, 'Heatmap of Refundable Rates (Previous Year)', 'Refundable Rate', prev_start_date, prev_end_date, rate_cmin, rate_cmax, stay_date_2)
-    full_refundable_fig_prev2 = plot_heatmap_plotly(full_refundable_norm_prev2, 'Heatmap of Refundable Rates (2 Years Previous)', 'Refundable Rate', prev2_start_date, prev2_end_date, rate_cmin, rate_cmax, stay_date_3)
+    pickup_fig = plot_heatmap_plotly(pickup_norm, pickup_norm_prev, pickup_norm_prev2, 'Heatmap of Total Rooms', 'Total Rooms', start_date, end_date, pickup_cmin, pickup_cmax, stay_date)
+    bookings_fig = plot_heatmap_plotly(bookings_norm, bookings_norm_prev, bookings_norm_prev2, 'Heatmap of Forecasted Revenue', 'Revenue', start_date, end_date, revenue_cmin, revenue_cmax, stay_date)
+    full_refundable_fig = plot_heatmap_plotly(full_refundable_norm, full_refundable_norm_prev, full_refundable_norm_prev2, 'Heatmap of Refundable Rates', 'Refundable Rate', start_date, end_date, rate_cmin, rate_cmax, stay_date)
 
-    return (pickup_fig, pickup_fig_prev, pickup_fig_prev2, bookings_fig, bookings_fig_prev, bookings_fig_prev2, full_refundable_fig, full_refundable_fig_prev, full_refundable_fig_prev2)
+    return (pickup_fig, bookings_fig, full_refundable_fig)
 
 # Unpack the returned values from precompute_graphs
-(pickup_fig, pickup_fig_prev, pickup_fig_prev2, bookings_fig, bookings_fig_prev, bookings_fig_prev2, full_refundable_fig, full_refundable_fig_prev, full_refundable_fig_prev2) = precompute_graphs(
+(pickup_fig, bookings_fig, full_refundable_fig) = precompute_graphs(
     pickup_data, full_refundable_rates_data, bookings_forecast_data, start_date, end_date, prev_start_date, prev_end_date, prev2_start_date, prev2_end_date,
-    custom_range, pickup_cmin, pickup_cmax, revenue_cmin, revenue_cmax, rate_cmin, rate_cmax, stay_date_1, stay_date_2, stay_date_3
+    custom_range, pickup_cmin, pickup_cmax, revenue_cmin, revenue_cmax, rate_cmin, rate_cmax, stay_date
 )
 
 # Use the second (wider) column for the tabs and plots
@@ -290,28 +352,17 @@ with col2:
     tab1, tab2, tab3 = st.tabs(["Pickup Data", "Forecasted Revenue Data", "Full Refundable Rates Data"])
 
     # Plot heatmaps in tabs
-    for tab, (current_fig, prev_fig, prev2_fig, tab_name) in zip(
-        [tab1, tab2, tab3],
-        [
-            (pickup_fig, pickup_fig_prev, pickup_fig_prev2, "Pickup Data"),
-            (bookings_fig, bookings_fig_prev, bookings_fig_prev2, "Forecasted Revenue Data"),
-            (full_refundable_fig, full_refundable_fig_prev, full_refundable_fig_prev2, "Full Refundable Rates Data")
-        ]
-    ):
-        with tab:
-            year_selection = st.radio("Select Year", ["Current Year", "LY1 (Previous Year)", "LY2 (2 Years Previous)"], key=f"{tab_name}_year_selection", horizontal=True)
-            
-            if year_selection == "Current Year":
-                st.plotly_chart(current_fig, use_container_width=True)
-                line_plot_stay_date = stay_date_1
-            elif year_selection == "LY1 (Previous Year)":
-                st.plotly_chart(prev_fig, use_container_width=True)
-                line_plot_stay_date = stay_date_2
-            else:
-                st.plotly_chart(prev2_fig, use_container_width=True)
-                line_plot_stay_date = stay_date_3
+    with tab1:
+        st.plotly_chart(pickup_fig, use_container_width=True)
+        # Add line plot below the heatmap
+        st.plotly_chart(create_line_plot(pickup_data, bookings_forecast_data, full_refundable_rates_data, stay_date, "Pickup Data"), use_container_width=True)
 
-            fig = create_single_line_plot(pickup_data, bookings_forecast_data, full_refundable_rates_data, line_plot_stay_date, tab_name)
-            st.plotly_chart(fig, use_container_width=True)
+    with tab2:
+        st.plotly_chart(bookings_fig, use_container_width=True)
+        # Add line plot below the heatmap
+        st.plotly_chart(create_line_plot(pickup_data, bookings_forecast_data, full_refundable_rates_data, stay_date, "Forecasted Revenue Data"), use_container_width=True)
 
-    st.caption("Use the mouse to zoom and pan on the heatmaps and line plots. Use the range selector and slider below the line plots to adjust the date range.")
+    with tab3:
+        st.plotly_chart(full_refundable_fig, use_container_width=True)
+        # Add line plot below the heatmap
+        st.plotly_chart(create_line_plot(pickup_data, bookings_forecast_data, full_refundable_rates_data, stay_date, "Full Refundable Rates Data"), use_container_width=True)
