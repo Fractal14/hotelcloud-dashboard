@@ -14,7 +14,6 @@ hotel_id = st.selectbox("Select Hotel ID", options=[3, 4, 6, 529, 4559], index=0
 PICKUP_COLOR = 'rgb(31, 119, 180)'  # Blue
 REVENUE_COLOR = 'rgb(44, 160, 44)'  # Green
 RATE_COLOR = 'rgb(214, 39, 40)'     # Red
-
 # Read in Data
 @st.cache_data
 def load_data(hotel_id):
@@ -202,7 +201,7 @@ col1, col2 = st.columns([1, 3])
 
 # Add the logo to the first (narrower) column
 with col1:
-    logo = Image.open('hotelcloud_logo.png')
+    logo = Image.open('cloudbeds_logo.png')
     st.image(logo, width=300)
 
     # Move date inputs to the first column

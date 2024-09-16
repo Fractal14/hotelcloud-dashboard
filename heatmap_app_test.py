@@ -16,9 +16,9 @@ col1, col2 = st.columns([1, 3])
 
 def get_hotel_id(hotel_name):
     hotel_mapping = {
+        'Mercure Hyde Park': 6,
         'Mercure Paddington': 3,
         'Hotel Indigo Paddington': 4,
-        'Mercure Hyde Park': 6,
         'Stonehouse Hotel': 529,
         'Stonehouse Court Hotel': 4559
     }
@@ -28,7 +28,7 @@ def get_hotel_id(hotel_name):
 with col1:
     logo = Image.open('cloudbeds_logo.png')
     st.image(logo, width=300)
-    hotel_name = st.selectbox("Select Hotel ID", options=['Mercure Paddington', 'Hotel Indigo Paddington', 'Mercure Hyde Park', 'Stonehouse Hotel', 'Stonehouse Court Hotel'], index=0)
+    hotel_name = st.selectbox("Select Hotel ID", options=['Mercure Hyde Park', 'Mercure Paddington', 'Hotel Indigo Paddington', 'Stonehouse Hotel', 'Stonehouse Court Hotel'], index=0)
     hotel_id = get_hotel_id(hotel_name)
 
 PICKUP_COLOR = 'rgb(31, 119, 180)'  # Blue
@@ -43,36 +43,31 @@ def load_data(hotel_id):
         pickup_data = pd.read_csv('3_pickup.csv')
         full_refundable_rates_data = pd.read_csv('full_refundables_rate_3.csv')
         bookings_forecast_data = pd.read_csv('forecasted_rev_3.csv')
+        compset_predictions_data = None
     if hotel_id == 4:
         pickup_data = pd.read_csv('4_pickup.csv')
         full_refundable_rates_data = pd.read_csv('full_refundables_rate_data_4.csv')
         bookings_forecast_data = pd.read_csv('forecast_revenue_4.csv')
+        compset_predictions_data = None
     if hotel_id == 6:
         pickup_data = pd.read_csv('6_pickup.csv')
         full_refundable_rates_data = pd.read_csv('full_refundables_rate_data.csv')
         bookings_forecast_data = pd.read_csv('bookings_forecast.csv')
+        compset_predictions_data = pd.read_parquet('6_rolling_predictions_t_competitor_median_rate.parquet')
     if hotel_id == 529:
         pickup_data = pd.read_csv('529_pickup.csv')
         full_refundable_rates_data = pd.read_csv('full_refundables_rate_529.csv')
         bookings_forecast_data = pd.read_csv('forecast_revenue_529.csv')
+        compset_predictions_data = None
     if hotel_id == 4559:
         pickup_data = pd.read_csv('4559_pickup.csv')
         full_refundable_rates_data = pd.read_csv('full_refundable_rates_4559.csv')
         bookings_forecast_data = pd.read_csv('forecast_data_4559.csv')
+        compset_predictions_data = None
 
-    return pickup_data, full_refundable_rates_data, bookings_forecast_data
+    return pickup_data, full_refundable_rates_data, bookings_forecast_data, compset_predictions_data
 
-pickup_data, full_refundable_rates_data, bookings_forecast_data = load_data(hotel_id)
-
-
-@st.cache_data
-def load_data():
-    pickup_data = pd.read_csv('6_pickup.csv')
-    full_refundable_rates_data = pd.read_csv('full_refundables_rate_data.csv')
-    bookings_forecast_data = pd.read_csv('bookings_forecast.csv')
-    return pickup_data, full_refundable_rates_data, bookings_forecast_data
-
-pickup_data, full_refundable_rates_data, bookings_forecast_data = load_data()
+pickup_data, full_refundable_rates_data, bookings_forecast_data, compset_predictions_data = load_data(hotel_id)
 
 # Helper functions
 def convert_to_previous_year(start_date, end_date, years_back=1):
@@ -118,12 +113,19 @@ def create_normalized_heatmap(data, start_date, end_date, value_column='refundab
 
 def plot_heatmap_plotly(data_current, data_prev, title, value_column, start_date, end_date, colorbar_min=None, colorbar_max=None, selected_stay_date=None):
     data_current, orig_index_current, orig_columns_current = data_current
-    data_prev, orig_index_prev, orig_columns_prev = data_prev
+    if data_prev is not None:
+        data_prev, orig_index_prev, orig_columns_prev = data_prev
 
     if colorbar_min is None:
-        colorbar_min = min(data_current.values.min(), data_prev.values.min())
+        if data_prev is not None:
+            colorbar_min = min(data_current.values.min(), data_prev.values.min())
+        else:
+            colorbar_min = data_current.values.min()
     if colorbar_max is None:
-        colorbar_max = max(data_current.values.max(), data_prev.values.max())
+        if data_prev is not None:
+            colorbar_max = max(data_current.values.max(), data_prev.values.max())
+        else:
+            colorbar_min = data_current.values.max()
 
     colors = pc.sequential.Rainbow
     colorscale = pc.make_colorscale(['rgb(255,255,255)'] + colors)
@@ -161,12 +163,16 @@ def plot_heatmap_plotly(data_current, data_prev, title, value_column, start_date
         )
 
     heatmap_current = create_heatmap(data_current, orig_index_current, orig_columns_current)
-    heatmap_prev = create_heatmap(data_prev, orig_index_prev, orig_columns_prev)
+    if data_prev is not None:
+        heatmap_prev = create_heatmap(data_prev, orig_index_prev, orig_columns_prev)
+        heatmap_prev.visible = False
 
     heatmap_current.visible = True
-    heatmap_prev.visible = False
 
-    fig = go.Figure(data=[heatmap_current, heatmap_prev])
+    if data_prev is not None:
+        fig = go.Figure(data=[heatmap_current, heatmap_prev])
+    else:
+        fig = go.Figure(data=[heatmap_current])
 
     fig.update_layout(
         updatemenus=[
@@ -221,15 +227,15 @@ def create_multi_year_line_plot(pickup_data, bookings_forecast_data, full_refund
         fig = go.Figure()
         filtered_data = data[data['stay_date'] == date.strftime('%Y-%m-%d')]
         filtered_data = filtered_data.sort_values('report_date')
-        
-        if selected_tab == "Pickup Data":
+
+        if selected_tab == "Occupancy":
             y_values = filtered_data['total_rooms']
             y_axis_title = 'Total Rooms'
-        elif selected_tab == "Forecasted Revenue Data":
+        elif selected_tab == "Revenue":
             filtered_data['cumulative_revenue'] = filtered_data['revenue'].cumsum()
             y_values = filtered_data['cumulative_revenue']
             y_axis_title = 'Cumulative Revenue'
-        else:  # Full Refundable Rates Data
+        else:  # Rates
             y_values = filtered_data['refundable_rate']
             y_axis_title = 'Refundable Rate'
         
@@ -246,8 +252,8 @@ def create_multi_year_line_plot(pickup_data, bookings_forecast_data, full_refund
         
         return fig
 
-    data = pickup_data if selected_tab == "Pickup Data" else \
-           bookings_forecast_data if selected_tab == "Forecasted Revenue Data" else \
+    data = pickup_data if selected_tab == "Occupancy" else \
+           bookings_forecast_data if selected_tab == "Revenue" else \
            full_refundable_rates_data
 
     # Current Year
@@ -255,7 +261,7 @@ def create_multi_year_line_plot(pickup_data, bookings_forecast_data, full_refund
     
     # LY1
     ly1_date = stay_date_2
-    fig_ly1 = create_year_plot(data, ly1_date, REVENUE_COLOR)
+    fig_ly1 = create_year_plot(data, ly1_date, PICKUP_COLOR)
     
     # LY2
     ly2_date = stay_date_3
@@ -335,9 +341,43 @@ full_refundable_norm_prev = create_normalized_heatmap(full_refundable_rates_data
 forecast_norm = create_normalized_heatmap(bookings_forecast_data, date(2023, 1, 1), date(2024, 12, 31), 'revenue')
 forecast_norm_prev = create_normalized_heatmap(bookings_forecast_data, prev_start_date, prev_end_date, 'revenue')
 
+def plot_simple_heatmap(df, x_column, y_column, z_column, title):
+    # Pivot the dataframe
+    heatmap_data = df.pivot(index=y_column, columns=x_column, values=z_column)
+    
+    # Sort the index (y-axis) in ascending order
+    heatmap_data = heatmap_data.sort_index(ascending=True)
+    
+    # Create the heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=heatmap_data.values,
+        x=heatmap_data.columns,
+        y=heatmap_data.index,
+        colorscale='Rainbow',
+        colorbar=dict(
+            orientation='h',  # Make colorbar horizontal
+            titleside='top',  # Place the title on top of the colorbar
+            x=0.5,            # Center the colorbar horizontally
+            y=-0.2,           # Position the colorbar further below the heatmap
+            len=0.9           # Adjust the length of the colorbar
+        )
+    ))
+
+    # Update the layout
+    fig.update_layout(
+        xaxis_title='Stay Date',
+        yaxis_title='Report Date',
+        height=1000,  # Increased height to accommodate more space for the colorbar
+        width=900,
+        yaxis=dict(autorange='reversed'),  # This ensures dates are in ascending order from top to bottom
+        margin=dict(b=200)  # Increase bottom margin significantly to make room for the colorbar
+    )
+    
+    return fig
+
 with col2:
     # Tabs for different datasets
-    tab1, tab2, tab3 = st.tabs(['Occupancy', 'Rates', 'Revenue'])
+    tab1, tab2, tab3, tab4 = st.tabs(['Occupancy', 'Rates', 'Revenue', 'CompSet Predictions'])
 
     # Pickup Tab
     with tab1:
@@ -413,4 +453,28 @@ with col2:
             st.plotly_chart(fig_current, use_container_width=True)
         with tab3b:
             st.plotly_chart(fig_ly1, use_container_width=True)
+
+    with tab4:
+        prediction_date = st.date_input("Select Prediction Date ", value=pd.Timestamp(date(2024, 1, 1)), min_value=date(2024, 1, 1), max_value=date(2024, 12, 31))
+        
+        # Convert prediction_date to datetime if it's not already
+        prediction_date = pd.to_datetime(prediction_date)
+        
+        compset_predictions_forecast = compset_predictions_data[compset_predictions_data['report_date'] == prediction_date]
+        
+        # Check if data exists for the selected date
+        if compset_predictions_forecast.empty:
+            st.warning("No data available for the selected date.")
+
+        tab4a, tab4b = st.tabs(["Actual", "Predicted"])
+        fig4a = plot_simple_heatmap(compset_predictions_forecast, 'stay_date', 'future_report_date', 'actual', title='CompSet Median Actuals')
+        fig4b = plot_simple_heatmap(compset_predictions_forecast, 'stay_date', 'future_report_date', 'pred', title='CompSet Median Predictions')
+        
+        with tab4a:
+            st.plotly_chart(fig4a, use_container_width=True)
+        with tab4b:
+            st.plotly_chart(fig4b, use_container_width=True)
+            
+
+
 
