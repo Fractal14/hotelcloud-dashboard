@@ -35,9 +35,6 @@ PICKUP_COLOR = 'rgb(31, 119, 180)'  # Blue
 REVENUE_COLOR = 'rgb(44, 160, 44)'  # Green
 RATE_COLOR = 'rgb(214, 39, 40)'     # Red
 
-
-# Read in Data
-@st.cache_data
 def load_data(hotel_id):
     if hotel_id == 3: 
         pickup_data = pd.read_csv('3_pickup.csv')
