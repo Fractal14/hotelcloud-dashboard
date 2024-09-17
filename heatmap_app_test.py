@@ -8,6 +8,7 @@ import plotly.colors as pc
 import math
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import logging
 
 st.set_page_config(layout="wide")
 
@@ -79,7 +80,7 @@ def convert_to_previous_year(start_date, end_date, years_back=1):
     return prev_start, prev_end
 
 @st.cache_data
-def create_normalized_heatmap(data, start_date, end_date, value_column='refundable_rate'):
+def create_normalized_heatmap(data, start_date, end_date, value_column='refundable_rate', columns_label = 'report_date'):
     data['report_date'] = pd.to_datetime(data['report_date'])
     data['stay_date'] = pd.to_datetime(data['stay_date'])
     
@@ -88,7 +89,7 @@ def create_normalized_heatmap(data, start_date, end_date, value_column='refundab
     
     all_dates = pd.date_range(start=start_date, end=end_date)
     
-    pivot_data = data.pivot_table(values=value_column, index='stay_date', columns='report_date', aggfunc='sum')
+    pivot_data = data.pivot_table(values=value_column, index='stay_date', columns=columns_label, aggfunc='sum')
     pivot_data = pivot_data.reindex(index=all_dates, columns=all_dates, fill_value=np.nan)
     
     original_index = pivot_data.index
@@ -326,17 +327,31 @@ with col1:
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
 # Precompute data
-prev_start_date, prev_end_date = convert_to_previous_year(date(2023, 1, 1), date(2024, 12, 31))
-prev2_start_date, prev2_end_date = convert_to_previous_year(date(2023, 1, 1), date(2024, 12, 31), years_back=2)
+@st.cache_data
+def get_previous_year_dates():
+    prev_start_date, prev_end_date = convert_to_previous_year(date(2023, 1, 1), date(2024, 12, 31))
+    prev2_start_date, prev2_end_date = convert_to_previous_year(date(2023, 1, 1), date(2024, 12, 31), years_back=2)
+    return prev_start_date, prev_end_date, prev2_start_date, prev2_end_date
 
-pickup_norm = create_normalized_heatmap(pickup_data, date(2023, 1, 1), date(2024, 12, 31), 'total_rooms')
-pickup_norm_prev = create_normalized_heatmap(pickup_data, prev_start_date, prev_end_date, 'total_rooms')
+@st.cache_data
+def get_normalized_heatmaps(pickup_data, full_refundable_rates_data, bookings_forecast_data):
+    prev_start_date, prev_end_date, _, _ = get_previous_year_dates()
+    
+    pickup_norm = create_normalized_heatmap(pickup_data, date(2023, 1, 1), date(2024, 12, 31), 'total_rooms')
+    pickup_norm_prev = create_normalized_heatmap(pickup_data, prev_start_date, prev_end_date, 'total_rooms')
+    
+    full_refundable_norm = create_normalized_heatmap(full_refundable_rates_data, date(2023, 1, 1), date(2024, 12, 31), 'refundable_rate')
+    full_refundable_norm_prev = create_normalized_heatmap(full_refundable_rates_data, prev_start_date, prev_end_date, 'refundable_rate')
+    
+    forecast_norm = create_normalized_heatmap(bookings_forecast_data, date(2023, 1, 1), date(2024, 12, 31), 'revenue')
+    forecast_norm_prev = create_normalized_heatmap(bookings_forecast_data, prev_start_date, prev_end_date, 'revenue')
+    
+    return pickup_norm, pickup_norm_prev, full_refundable_norm, full_refundable_norm_prev, forecast_norm, forecast_norm_prev
 
-full_refundable_norm = create_normalized_heatmap(full_refundable_rates_data, date(2023, 1, 1), date(2024, 12, 31), 'refundable_rate')
-full_refundable_norm_prev = create_normalized_heatmap(full_refundable_rates_data, prev_start_date, prev_end_date, 'refundable_rate')
+# Use the cached functions
+prev_start_date, prev_end_date, prev2_start_date, prev2_end_date = get_previous_year_dates()
 
-forecast_norm = create_normalized_heatmap(bookings_forecast_data, date(2023, 1, 1), date(2024, 12, 31), 'revenue')
-forecast_norm_prev = create_normalized_heatmap(bookings_forecast_data, prev_start_date, prev_end_date, 'revenue')
+pickup_norm, pickup_norm_prev, full_refundable_norm, full_refundable_norm_prev, forecast_norm, forecast_norm_prev = get_normalized_heatmaps(pickup_data, full_refundable_rates_data, bookings_forecast_data)
 
 def plot_simple_heatmap(df, x_column, y_column, z_column, title):
     # Pivot the dataframe
@@ -374,7 +389,7 @@ def plot_simple_heatmap(df, x_column, y_column, z_column, title):
 
 with col2:
     # Tabs for different datasets
-    tab1, tab2, tab3, tab4 = st.tabs(['Occupancy', 'Rates', 'Revenue', 'CompSet Predictions'])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(['Occupancy', 'Rates', 'Revenue', 'CompSet Median Rates', 'CompSet Median Rates (LY1)'])
 
     # Pickup Tab
     with tab1:
@@ -451,26 +466,72 @@ with col2:
         with tab3b:
             st.plotly_chart(fig_ly1, use_container_width=True)
 
+    @st.cache_data
+    def load_and_process_compset_data(compset_predictions_data):
+        # This function will load and process the data once, then cache the result
+        return compset_predictions_data
+
+    @st.cache_data
+    def filter_compset_data(compset_predictions_data, prediction_date, ly1_prediction_date):
+        # This function will filter the data based on the selected dates
+        compset_predictions_current = compset_predictions_data[compset_predictions_data['report_date'] == str(prediction_date)]
+        compset_predictions_prev = compset_predictions_data[compset_predictions_data['report_date'] == str(ly1_prediction_date)]
+        return compset_predictions_current, compset_predictions_prev
+
+    @st.cache_data
+    def create_heatmaps(compset_predictions_current, compset_predictions_prev, value_column):
+        prev_start_date, prev_end_date = convert_to_previous_year(date(2024, 1, 1), date(2025, 1, 1))
+        compset_norm = create_normalized_heatmap(compset_predictions_current, date(2024, 1, 1), date(2025, 1, 1), value_column, columns_label='future_report_date')
+        compset_norm_prev = create_normalized_heatmap(compset_predictions_prev, prev_start_date, prev_end_date, value_column, columns_label='future_report_date')
+        return compset_norm, compset_norm_prev
+
+    # Load and cache the full dataset
+    compset_predictions_data = load_and_process_compset_data(compset_predictions_data)
+
     with tab4:
-        prediction_date = st.date_input("Select Prediction Date ", value=pd.Timestamp(date(2024, 1, 1)), min_value=date(2024, 1, 1), max_value=date(2024, 12, 31))
+        prediction_date = st.date_input("Select Prediction Date", value=pd.Timestamp(date(2024, 1, 1)), min_value=date(2024, 1, 1), max_value=date(2025, 1, 1))
+        ly1_prediction_date, _ = convert_to_previous_year(prediction_date, prediction_date, years_back=1)
+        st.info(f"LY1 (Previous Year): {ly1_prediction_date.strftime('%A, %B %d, %Y')}")
         
-        # Convert prediction_date to datetime if it's not already
+        data_type = st.radio("Select data type:", ("Actual", "Predicted"))
+        
         prediction_date = pd.to_datetime(prediction_date)
         
-        compset_predictions_forecast = compset_predictions_data[compset_predictions_data['report_date'] == prediction_date]
-        
-        # Check if data exists for the selected date
-        if compset_predictions_forecast.empty:
-            st.warning("No data available for the selected date.")
+        # Use the cached function to filter data
+        compset_predictions_current, compset_predictions_prev = filter_compset_data(compset_predictions_data, prediction_date, ly1_prediction_date)
 
-        tab4a, tab4b = st.tabs(["Actual", "Predicted"])
-        fig4a = plot_simple_heatmap(compset_predictions_forecast, 'stay_date', 'future_report_date', 'actual', title='CompSet Median Actuals')
-        fig4b = plot_simple_heatmap(compset_predictions_forecast, 'stay_date', 'future_report_date', 'pred', title='CompSet Median Predictions')
-        
-        with tab4a:
-            st.plotly_chart(fig4a, use_container_width=True)
-        with tab4b:
-            st.plotly_chart(fig4b, use_container_width=True)
+        if compset_predictions_current.empty or compset_predictions_prev.empty:
+            st.warning("No data available for the selected date(s).")
+        else:
+            value_column = 'actual' if data_type == "Actual" else 'pred'
+            
+            # Use the cached function to create heatmaps
+            compset_norm, compset_norm_prev = create_heatmaps(compset_predictions_current, compset_predictions_prev, value_column)
+
+            overall_min = min(compset_predictions_current[value_column].min(), compset_predictions_prev[value_column].min())
+            overall_max = max(compset_predictions_current[value_column].max(), compset_predictions_prev[value_column].max())
+            
+            fig4 = plot_heatmap_plotly(
+                compset_norm, compset_norm_prev,
+                f'CompSet Median {data_type}', value_column,
+                date(2024, 1, 1), date(2025, 1, 1),
+                selected_stay_date=None, 
+                colorbar_min=overall_min, colorbar_max=overall_max
+            )
+            st.plotly_chart(fig4, use_container_width=True)
+
+    with tab5:
+        logging.info(f"Type of ly1_prediction_date: {type(ly1_prediction_date)}")
+        compset_predictions_forecast_ly1 = compset_predictions_data[compset_predictions_data['report_date'] == str(ly1_prediction_date)]
+        tab5a, tab5b = st.tabs(["Actual", "Predicted"])
+        fig5a = plot_simple_heatmap(compset_predictions_forecast_ly1, 'future_report_date', 'stay_date', 'actual', title='CompSet Median Actuals')
+        fig5b = plot_simple_heatmap(compset_predictions_forecast_ly1, 'future_report_date', 'stay_date', 'pred', title='CompSet Median Predictions')
+        with tab5a:
+            st.plotly_chart(fig5a, use_container_width=True)
+        with tab5b:
+            st.plotly_chart(fig5b, use_container_width=True)
+
+
             
 
 
