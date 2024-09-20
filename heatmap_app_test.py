@@ -389,7 +389,7 @@ def plot_simple_heatmap(df, x_column, y_column, z_column, title):
 
 with col2:
     # Tabs for different datasets
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(['Occupancy', 'Rates', 'Revenue', 'CompSet Median Rates', 'CompSet Median Rates (LY1)'])
+    tab1, tab2, tab3, tab4 = st.tabs(['Occupancy', 'Rates', 'Revenue', 'Compset Median Rates'])
 
     # Pickup Tab
     with tab1:
@@ -520,16 +520,6 @@ with col2:
             )
             st.plotly_chart(fig4, use_container_width=True)
 
-    with tab5:
-        logging.info(f"Type of ly1_prediction_date: {type(ly1_prediction_date)}")
-        compset_predictions_forecast_ly1 = compset_predictions_data[compset_predictions_data['report_date'] == str(ly1_prediction_date)]
-        tab5a, tab5b = st.tabs(["Actual", "Predicted"])
-        fig5a = plot_simple_heatmap(compset_predictions_forecast_ly1, 'future_report_date', 'stay_date', 'actual', title='CompSet Median Actuals')
-        fig5b = plot_simple_heatmap(compset_predictions_forecast_ly1, 'future_report_date', 'stay_date', 'pred', title='CompSet Median Predictions')
-        with tab5a:
-            st.plotly_chart(fig5a, use_container_width=True)
-        with tab5b:
-            st.plotly_chart(fig5b, use_container_width=True)
 
 
             
